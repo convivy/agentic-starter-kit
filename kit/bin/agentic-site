@@ -1,0 +1,318 @@
+#!/usr/bin/env python3
+"""agentic-site — your local team site: what the system has been doing, and
+what it knows.
+
+A zero-dependency stdlib server (default http://127.0.0.1:8321) with four pages:
+
+  /          overview — stat tiles + the latest handoff + the backlog head
+  /activity  sessions and handoffs by day, from agent-runs/
+  /kb        browse + full-text search the knowledge base (reads the index)
+  /cockpit   the steward's backlog and decision log, rendered
+
+The purpose of these dashboards: an agentic system does real work while you
+are not watching, and a system you can't inspect is a system you stop
+trusting. These pages answer "what has it been doing, what did it decide, and
+what does it know" at a glance. Grow them as your system grows — that is a
+steward task (see EXTENDING.md).
+
+Run: `agentic-site` then open http://127.0.0.1:8321. Binds localhost only.
+"""
+import html
+import os
+import pathlib
+import re
+import sqlite3
+import urllib.parse
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+ROOT = pathlib.Path(os.environ.get("AGENTIC_ROOT", pathlib.Path.home() / "agentic"))
+RUNS = ROOT / "agent-runs"
+DB = ROOT / ".index" / "index.db"
+COCKPIT = ROOT / "substrate"
+PORT = int(os.environ.get("AGENTIC_SITE_PORT", "8321"))
+
+CSS = """
+:root { --ink:#1a1d21; --muted:#6a7076; --line:#e4e6e8; --bg:#fafaf8;
+        --card:#ffffff; --accent:#2f6feb; }
+* { box-sizing:border-box; margin:0; }
+body { font:16px/1.55 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+       color:var(--ink); background:var(--bg); }
+header { border-bottom:1px solid var(--line); background:var(--card); }
+header .in { max-width:900px; margin:0 auto; padding:14px 24px;
+             display:flex; gap:22px; align-items:baseline; }
+header b { font-size:17px; }
+header a { color:var(--muted); text-decoration:none; font-size:15px; }
+header a.on, header a:hover { color:var(--accent); }
+main { max-width:900px; margin:0 auto; padding:28px 24px 64px; }
+h1 { font-size:22px; margin:0 0 18px; }
+h2 { font-size:17px; margin:26px 0 10px; }
+.tiles { display:flex; gap:14px; flex-wrap:wrap; margin-bottom:8px; }
+.tile { background:var(--card); border:1px solid var(--line); border-radius:8px;
+        padding:14px 20px; min-width:150px; }
+.tile .n { font-size:30px; font-weight:650; letter-spacing:-0.5px; }
+.tile .l { color:var(--muted); font-size:13px; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:8px;
+        padding:16px 20px; margin:10px 0; overflow-x:auto; }
+.card h3 { font-size:15px; margin-bottom:6px; }
+.muted { color:var(--muted); font-size:14px; }
+ul.plain { list-style:none; padding:0; }
+ul.plain li { padding:7px 0; border-bottom:1px solid var(--line); }
+ul.plain li:last-child { border-bottom:none; }
+a { color:var(--accent); }
+pre { background:#f4f4f2; border-radius:6px; padding:12px; overflow-x:auto;
+      font-size:13.5px; }
+code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:0.92em; }
+input[type=search] { font:inherit; padding:8px 12px; border:1px solid var(--line);
+      border-radius:6px; width:100%; max-width:420px; }
+.doc h1,.doc h2,.doc h3 { margin:18px 0 8px; }
+.doc p, .doc ul, .doc pre { margin-bottom:10px; }
+.doc ul { padding-left:22px; }
+.kind { display:inline-block; font-size:12px; color:var(--muted);
+        border:1px solid var(--line); border-radius:10px; padding:0 8px; }
+"""
+
+
+def md(text):
+    """Small markdown-to-HTML: headings, fences, bullets, bold, code, links.
+    Escapes first, so doc content can't inject markup."""
+    out, in_code, in_list = [], False, False
+    for raw in text.splitlines():
+        line = html.escape(raw, quote=False)
+        if line.strip().startswith("```"):
+            if in_list:
+                out.append("</ul>")
+                in_list = False
+            out.append("<pre><code>" if not in_code else "</code></pre>")
+            in_code = not in_code
+            continue
+        if in_code:
+            out.append(line)
+            continue
+        line = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", line)
+        line = re.sub(r"`([^`]+)`", r"<code>\1</code>", line)
+        line = re.sub(r"\[([^\]]+)\]\((https?://[^)]+)\)", r'<a href="\2">\1</a>', line)
+        m = re.match(r"(#{1,4}) (.*)", line)
+        if m:
+            if in_list:
+                out.append("</ul>")
+                in_list = False
+            level = min(len(m.group(1)) + 1, 4)  # doc h1 -> page h2
+            out.append(f"<h{level}>{m.group(2)}</h{level}>")
+            continue
+        if re.match(r"\s*[-*] ", line):
+            if not in_list:
+                out.append("<ul>")
+                in_list = True
+            item = re.sub(r"^\s*[-*] ", "", line)
+            out.append(f"<li>{item}</li>")
+            continue
+        if in_list:
+            out.append("</ul>")
+            in_list = False
+        out.append(f"<p>{line}</p>" if line.strip() else "")
+    if in_list:
+        out.append("</ul>")
+    if in_code:
+        out.append("</code></pre>")
+    return "\n".join(out)
+
+
+def page(title, active, body):
+    nav = "".join(
+        f'<a href="{p}" class="{"on" if p == active else ""}">{t}</a>'
+        for p, t in [("/", "Overview"), ("/activity", "Activity"),
+                     ("/kb", "Knowledge"), ("/cockpit", "Cockpit")]
+    )
+    return (
+        f"<!doctype html><html><head><meta charset='utf-8'>"
+        f"<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        f"<title>{html.escape(title)}</title><style>{CSS}</style></head><body>"
+        f"<header><div class='in'><b>team site</b>{nav}</div></header>"
+        f"<main>{body}</main></body></html>"
+    )
+
+
+def handoffs():
+    """All handoffs, newest first: (day, context, time, path)."""
+    found = []
+    if not RUNS.is_dir():
+        return found
+    for day_dir in sorted(RUNS.iterdir(), reverse=True):
+        if not day_dir.is_dir() or not re.match(r"\d{4}-\d{2}-\d{2}$", day_dir.name):
+            continue
+        for run in sorted(day_dir.iterdir(), reverse=True):
+            hf = run / "handoff.md"
+            if hf.is_file():
+                m = re.match(r"co-(.+)-(\d{4})$", run.name)
+                ctx, hhmm = (m.group(1), m.group(2)) if m else (run.name, "")
+                found.append((day_dir.name, ctx, hhmm, hf))
+    return found
+
+
+def kb_rows(query=None):
+    if not DB.is_file():
+        return None
+    con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+    try:
+        if query:
+            rows = con.execute(
+                "SELECT id, title, kind, snippet(docs, 6, '<b>', '</b>', ' … ', 16) "
+                "FROM docs WHERE docs MATCH ? ORDER BY rank LIMIT 40", (query,)
+            ).fetchall()
+        else:
+            rows = con.execute(
+                "SELECT id, title, kind, '' FROM docs ORDER BY id"
+            ).fetchall()
+    except sqlite3.Error:
+        rows = []
+    con.close()
+    return rows
+
+
+def kb_doc(doc_id):
+    if not DB.is_file():
+        return None
+    con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+    r = con.execute(
+        "SELECT id, title, kind, status, body FROM docs WHERE id = ?", (doc_id,)
+    ).fetchone()
+    con.close()
+    return r
+
+
+def overview():
+    hs = handoffs()
+    n_docs = len(kb_rows() or [])
+    days = len({h[0] for h in hs})
+    tiles = "".join(
+        f"<div class='tile'><div class='n'>{n}</div><div class='l'>{label}</div></div>"
+        for n, label in [(n_docs, "knowledge docs"), (len(hs), "handoffs"),
+                         (days, "active days")]
+    )
+    body = f"<h1>Overview</h1><div class='tiles'>{tiles}</div>"
+    if hs:
+        day, ctx, hhmm, path = hs[0]
+        body += (f"<h2>Latest handoff</h2><div class='card'>"
+                 f"<h3>{html.escape(ctx)} — {day} {hhmm[:2]}:{hhmm[2:]}</h3>"
+                 f"<div class='doc'>{md(path.read_text(encoding='utf-8'))}</div></div>")
+    backlog = COCKPIT / "backlog.md"
+    if backlog.is_file():
+        head = "\n".join(backlog.read_text(encoding="utf-8").splitlines()[:30])
+        body += (f"<h2>Backlog (head)</h2><div class='card'><div class='doc'>"
+                 f"{md(head)}</div><p class='muted'><a href='/cockpit'>full cockpit →</a></p></div>")
+    return page("team site", "/", body)
+
+
+def activity():
+    hs = handoffs()
+    body = "<h1>Activity</h1>"
+    if not hs:
+        body += "<p class='muted'>No handoffs yet. End a session with /handoff-leave and it will appear here.</p>"
+    day_now = None
+    for day, ctx, hhmm, path in hs:
+        if day != day_now:
+            if day_now is not None:
+                body += "</ul>"
+            body += f"<h2>{day}</h2><ul class='plain'>"
+            day_now = day
+        t = f"{hhmm[:2]}:{hhmm[2:]}" if hhmm else ""
+        body += (f"<li><b>{html.escape(ctx)}</b> <span class='muted'>{t}</span> — "
+                 f"<a href='/handoff?p={urllib.parse.quote(str(path))}'>handoff</a></li>")
+    if day_now is not None:
+        body += "</ul>"
+    return page("activity", "/activity", body)
+
+
+def handoff_view(qs):
+    p = pathlib.Path(urllib.parse.parse_qs(qs).get("p", [""])[0])
+    try:
+        p.resolve().relative_to(RUNS.resolve())  # only files under agent-runs
+    except (ValueError, OSError):
+        return page("not found", "/activity", "<p>Not a handoff path.</p>")
+    if not p.is_file():
+        return page("not found", "/activity", "<p>No such handoff.</p>")
+    return page(p.parent.name, "/activity",
+                f"<div class='card doc'>{md(p.read_text(encoding='utf-8'))}</div>")
+
+
+def kb(qs):
+    q = urllib.parse.parse_qs(qs).get("q", [""])[0]
+    rows = kb_rows(q or None)
+    body = ("<h1>Knowledge</h1><form action='/kb'>"
+            f"<input type='search' name='q' value='{html.escape(q, quote=True)}' "
+            "placeholder='full-text search…'></form>")
+    if rows is None:
+        body += "<p class='muted'>No index yet — run <code>kb-index</code> first.</p>"
+    elif not rows:
+        body += "<p class='muted'>No matches.</p>"
+    else:
+        body += "<ul class='plain'>"
+        for doc_id, title, kind, snip in rows:
+            body += (f"<li><a href='/kb/doc?id={urllib.parse.quote(doc_id)}'>"
+                     f"{html.escape(title or doc_id)}</a> "
+                     f"<span class='kind'>{html.escape(kind)}</span>"
+                     + (f"<div class='muted'>{snip}</div>" if snip else "")
+                     + "</li>")
+        body += "</ul>"
+    return page("knowledge", "/kb", body)
+
+
+def kb_view(qs):
+    doc_id = urllib.parse.parse_qs(qs).get("id", [""])[0]
+    r = kb_doc(doc_id)
+    if not r:
+        return page("not found", "/kb", "<p>No such doc.</p>")
+    _, title, kind, status, doc_body = r
+    return page(title or doc_id, "/kb",
+                f"<h1>{html.escape(title or doc_id)}</h1>"
+                f"<p class='muted'>{html.escape(kind)} · {html.escape(status)}</p>"
+                f"<div class='card doc'>{md(doc_body)}</div>")
+
+
+def cockpit():
+    body = "<h1>Cockpit</h1>"
+    for name, fname in [("Backlog", "backlog.md"), ("Decision log", "decisions.md")]:
+        f = COCKPIT / fname
+        if f.is_file():
+            body += (f"<h2>{name}</h2><div class='card doc'>"
+                     f"{md(f.read_text(encoding='utf-8'))}</div>")
+        else:
+            body += f"<h2>{name}</h2><p class='muted'>{f} not found.</p>"
+    return page("cockpit", "/cockpit", body)
+
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        path, _, qs = self.path.partition("?")
+        try:
+            if path == "/":
+                out = overview()
+            elif path == "/activity":
+                out = activity()
+            elif path == "/handoff":
+                out = handoff_view(qs)
+            elif path == "/kb":
+                out = kb(qs)
+            elif path == "/kb/doc":
+                out = kb_view(qs)
+            elif path == "/cockpit":
+                out = cockpit()
+            else:
+                self.send_error(404)
+                return
+        except Exception as e:  # a broken doc must not take the site down
+            out = page("error", path, f"<p>Render error: {html.escape(str(e))}</p>")
+        data = out.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def log_message(self, fmt, *args):
+        pass  # quiet
+
+
+if __name__ == "__main__":
+    print(f"agentic-site: http://127.0.0.1:{PORT}  (root: {ROOT})")
+    ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()

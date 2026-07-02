@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# agentic-guard — PreToolUse hook: the human stays in the loop on irreversible,
+# outward-facing git actions. The harness runs this before every Bash tool call;
+# exit 2 blocks the call and returns the message to the agent.
+#
+# Blocks, in any segment of a compound command:
+#   - merging a pull request (gh pr merge)
+#   - force-pushing to main/master
+#
+# Extend this file as you discover actions that warrant a human gate; harden it
+# rather than weakening it. If an agent is asked to merge, the right behavior is
+# to hand the operator the PR URL, not to reword the command until it slips by.
+set -u
+
+input="$(cat)"
+cmd="$(printf '%s' "$input" | python3 -c 'import json,sys
+try:
+    print(json.load(sys.stdin).get("tool_input", {}).get("command", ""))
+except Exception:
+    pass' 2>/dev/null || true)"
+
+[ -z "$cmd" ] && exit 0
+
+block() {
+  echo "BLOCKED by agentic-guard: $1 Ask the operator to do this manually." >&2
+  exit 2
+}
+
+# PR merge via gh, anywhere in the command line.
+printf '%s' "$cmd" | grep -Eq '(^|[;&|(`[:space:]])gh[[:space:]]+pr[[:space:]]+merge\b' \
+  && block "merging a pull request."
+
+# Force-push (either flag form, including --force-with-lease) touching main/master.
+if printf '%s' "$cmd" | grep -Eq 'git[[:space:]]+push[^;&|]*([[:space:]]-f\b|--force)' ; then
+  printf '%s' "$cmd" | grep -Eq '\b(main|master)\b' \
+    && block "force-pushing to a protected branch."
+fi
+
+exit 0

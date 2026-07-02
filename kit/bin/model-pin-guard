@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# model-pin-guard — SessionStart hook: keep ~/.claude/settings.json pinned to
+# the model you chose at install time.
+#
+# The hazard: Claude Code's `/model <x>` command switches the running session
+# AND silently saves <x> as the machine-wide default for new sessions. A casual
+# per-session switch to a premium model therefore un-pins your default, and
+# every later bare `claude` launch inherits it. That exact mechanism has burned
+# a subscription plus real money in a day.
+#
+# The intended pin lives in $AGENTIC_ROOT/.model-pin (written by install.sh).
+# When settings.json's "model" is absent or different, this hook restores the
+# pin (atomic write) and tells the session what happened. Restoring is
+# side-effect-free for running sessions — a session's model is resolved at
+# launch and held in session state; the file is only read at startup.
+#
+# Deliberate per-session switches still work (`/model x`, `co -m x`); only the
+# persisted default snaps back at the next session start. To change the pin
+# for real, edit $AGENTIC_ROOT/.model-pin.
+#
+# Fail-open by design: no pin file, unreadable JSON, or missing python3 means
+# warn (or stay silent) and exit 0 — a guard must never block a session.
+set -u
+
+ROOT="${AGENTIC_ROOT:-$HOME/agentic}"
+PIN_FILE="$ROOT/.model-pin"
+SETTINGS="$HOME/.claude/settings.json"
+
+[ -f "$PIN_FILE" ] || exit 0
+[ -f "$SETTINGS" ] || exit 0
+
+PIN="$(head -1 "$PIN_FILE" | tr -d '[:space:]')"
+[ -n "$PIN" ] || exit 0
+
+PYTHON3="$(command -v python3 || true)"
+if [ -z "$PYTHON3" ]; then
+  echo "model-pin-guard: python3 not found — cannot verify the model pin in $SETTINGS." >&2
+  exit 0
+fi
+
+"$PYTHON3" - "$SETTINGS" "$PIN" <<'PYEOF'
+import json, os, sys, tempfile
+
+settings_path, pin = sys.argv[1], sys.argv[2]
+
+try:
+    with open(settings_path) as f:
+        data = json.load(f)
+except (OSError, ValueError):
+    print(f"model-pin-guard: {settings_path} is unreadable or not valid JSON — "
+          f"cannot verify the model pin. Check it by hand.", file=sys.stderr)
+    sys.exit(0)
+
+current = data.get("model")
+if current == pin:
+    sys.exit(0)  # the one legitimate state — silent
+
+data["model"] = pin
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(settings_path), suffix=".tmp")
+try:
+    with os.fdopen(fd, "w") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+    os.replace(tmp, settings_path)
+except OSError:
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+    print(f"model-pin-guard: found model={current!r} but could not rewrite "
+          f"{settings_path} — restore the pin ({pin}) by hand.", file=sys.stderr)
+    sys.exit(0)
+
+was = repr(current) if current is not None else "absent (bare `claude` would fall back to the CLI's built-in default)"
+
+print(f"model-pin-guard: settings.json model was {was}; restored the pin ({pin}). "
+      f"A /model command probably saved itself as the default. Deliberate "
+      f"per-session switches are fine; only the saved default was reset.", file=sys.stderr)
+
+ctx = (f"MODEL-PIN GUARD: at session start, ~/.claude/settings.json had model {was} "
+       f"instead of the pinned {pin}; the hook restored the pin. Surface this to the "
+       f"operator. This hook cannot change the CURRENT session's model — if this "
+       f"session was launched bare (plain `claude`, no --model) it may itself be on "
+       f"the un-pinned model; suggest checking /status. The restore is the guard "
+       f"working, not an error.")
+print(json.dumps({"hookSpecificOutput": {
+    "hookEventName": "SessionStart", "additionalContext": ctx}}))
+PYEOF
+
+exit 0

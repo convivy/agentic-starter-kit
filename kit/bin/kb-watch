@@ -1,0 +1,52 @@
+#!/usr/bin/env python3
+"""kb-watch — reindex the knowledge base whenever a doc changes.
+
+A zero-dependency mtime poller (2s interval): scans knowledge/projects for
+.md files, and when the set of (path, mtime) pairs changes, runs kb-index.
+Polling a few hundred markdown files every 2 seconds costs effectively
+nothing and avoids a third-party watcher dependency.
+
+Run it in a terminal to try it; make it a login service (launchd on macOS,
+`systemd --user` on Linux) when you want it always-on — BOOTSTRAP.md shows
+both.
+"""
+import os
+import pathlib
+import subprocess
+import sys
+import time
+
+ROOT = pathlib.Path(os.environ.get("AGENTIC_ROOT", pathlib.Path.home() / "agentic"))
+WATCH = ROOT / "knowledge" / "projects"
+KB_INDEX = pathlib.Path(__file__).resolve().parent / "kb-index"
+
+
+def snapshot():
+    state = {}
+    for md in WATCH.rglob("*.md"):
+        try:
+            state[str(md)] = md.stat().st_mtime_ns
+        except OSError:
+            pass
+    return state
+
+
+def main():
+    if not WATCH.is_dir():
+        print(f"kb-watch: {WATCH} does not exist; run install.sh first", file=sys.stderr)
+        sys.exit(1)
+    prev = snapshot()
+    print(f"kb-watch: watching {WATCH} ({len(prev)} docs)")
+    while True:
+        time.sleep(2)
+        cur = snapshot()
+        if cur != prev:
+            prev = cur
+            subprocess.run([sys.executable, str(KB_INDEX)], check=False)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        pass

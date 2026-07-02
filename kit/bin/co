@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+# co — launch a Claude Code session ("a co") in a known context, on a pinned model.
+#
+# A "co" is one Claude Code session opened in a particular directory whose
+# CLAUDE.md defines its job. The steward co (in $AGENTIC_ROOT/substrate) tends
+# the system itself; a product co (any repo with a CLAUDE.md) builds that
+# product. Same tool, different context.
+#
+# Usage:
+#   co                  launch a session here, on the pinned model
+#   co -r               refresh first: pull the knowledge repo, then launch
+#                       resuming from the latest handoff (/handoff-pickup)
+#   co -m <model>       one-session model override (explicit, operator-chosen)
+#   co <role>           launch with a role from knowledge/projects/shared/agents/<role>.md
+#   co <role> "prompt"  role + initial prompt
+#
+# The model rule, learned the expensive way: NEVER let a session inherit the
+# CLI's built-in default. An unpinned default once silently switched to a
+# premium model and burned a subscription plus real money in a day. Every
+# launch below passes an explicit --model.
+set -euo pipefail
+
+ROOT="${AGENTIC_ROOT:-$HOME/agentic}"
+
+# Resolve the pinned model: explicit env override, else the pin file the
+# installer wrote, else the settings.json pin, else a safe fallback.
+_pinned_model() {
+  if [ -n "${CO_DEFAULT_MODEL:-}" ]; then
+    printf '%s' "$CO_DEFAULT_MODEL"; return
+  fi
+  if [ -f "$ROOT/.model-pin" ]; then
+    head -1 "$ROOT/.model-pin" | tr -d '[:space:]'; return
+  fi
+  python3 - "$HOME/.claude/settings.json" 2>/dev/null <<'PY' || printf 'claude-sonnet-5'
+import json, sys
+try:
+    print(json.load(open(sys.argv[1])).get("model") or "claude-sonnet-5", end="")
+except Exception:
+    print("claude-sonnet-5", end="")
+PY
+}
+
+MODEL="$(_pinned_model)"
+
+# First non-flag word is an optional role name.
+role=""
+case "${1:-}" in
+  -*|"") : ;;
+  *) role="$1"; shift ;;
+esac
+
+refresh=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -r|--refresh) refresh=1; shift ;;
+    -m|--model)
+      if [ $# -lt 2 ]; then echo "co: $1 requires a model name" >&2; exit 1; fi
+      MODEL="$2"; shift 2 ;;
+    --model=*)    MODEL="${1#--model=}"; shift ;;
+    *) break ;;
+  esac
+done
+
+if [ -z "$MODEL" ]; then
+  echo "co: no model resolved — set CO_DEFAULT_MODEL or write $ROOT/.model-pin" >&2
+  exit 1
+fi
+
+# Inside tmux, name and color this window so each co is visually distinct.
+# co never starts tmux itself; run it inside tmux (or not) as you prefer.
+context="${role:-$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")}"
+if [ -n "${TMUX:-}" ]; then
+  # Deterministic color per context name. bash 3.2-safe (no arrays needed).
+  hash=$(printf '%s' "$context" | cksum | cut -d' ' -f1)
+  case $(( hash % 8 )) in
+    0) color=colour39 ;;  1) color=colour208 ;; 2) color=colour46 ;;  3) color=colour201 ;;
+    4) color=colour226 ;; 5) color=colour51 ;;  6) color=colour129 ;; 7) color=colour160 ;;
+  esac
+  tmux rename-window "$context" 2>/dev/null || true
+  tmux set -w window-status-current-style "fg=black,bg=$color" 2>/dev/null || true
+fi
+
+# -r: sync the knowledge repo (if it has a remote), then resume from the
+# latest handoff unless an explicit prompt was passed.
+if [ "$refresh" -eq 1 ]; then
+  kb="$ROOT/knowledge"
+  if [ -d "$kb/.git" ] && git -C "$kb" remote get-url origin >/dev/null 2>&1; then
+    echo "co: refresh — pulling $kb" >&2
+    GIT_TERMINAL_PROMPT=0 git -C "$kb" pull --ff-only || {
+      echo "co: refresh — knowledge pull failed; fix the remote/auth, then retry." >&2
+      exit 1
+    }
+  fi
+  if [ $# -eq 0 ]; then
+    set -- /handoff-pickup
+  fi
+fi
+
+# A role preloads its system prompt from the KB agent file (frontmatter stripped).
+args=(--model "$MODEL")
+if [ -n "$role" ]; then
+  role_file="$ROOT/knowledge/projects/shared/agents/${role}.md"
+  if [ ! -f "$role_file" ]; then
+    echo "co: no role '$role' at $role_file" >&2
+    echo "co: available roles:" >&2
+    ls "$ROOT/knowledge/projects/shared/agents/" 2>/dev/null | sed 's/\.md$//; s/^/co:   /' >&2
+    exit 1
+  fi
+  args+=(--append-system-prompt "$(awk 'NR==1&&/^---$/{skip=1;next} skip&&/^---$/{skip=0;next} !skip' "$role_file")")
+fi
+
+exec claude "${args[@]}" "$@"
