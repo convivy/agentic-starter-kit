@@ -72,11 +72,22 @@ expect 2 "blocks pr merge"            guard 'gh pr merge 42'
 expect 2 "blocks pr merge in chain"   guard 'cd /x && gh pr merge 42 --squash'
 expect 2 "blocks quoted pr merge (bash -c)" guard 'bash -c \"gh pr merge 42\"'
 expect 2 "blocks quoted pr merge (eval)"    guard "eval 'gh pr merge 42'"
+expect 2 "blocks pr merge before ;"   guard 'gh pr merge; echo done'
+expect 2 "blocks pr merge before &&"  guard 'gh pr merge&&echo'
+expect 2 "blocks pr merge in subshell" guard 'echo $(gh pr merge)'
+expect 2 "blocks bare pr merge at EOL" guard 'gh pr merge'
+expect 0 "allows word containing merge" guard 'gh pr view merged-branch'
 expect 2 "blocks force-push main"     guard 'git push --force origin main'
 expect 2 "blocks -f master"           guard 'git push -f origin master'
 expect 2 "blocks force-with-lease main" guard 'git push --force-with-lease origin main'
 expect 2 "blocks bare force-push"     guard 'git push -f'
 expect 2 "blocks force-push remote-only" guard 'git push --force origin'
+expect 2 "blocks force-push HEAD"     guard 'git push -f origin HEAD'
+expect 2 "blocks force-push @"        guard 'git push --force origin @'
+expect 2 "blocks force-push @{upstream}" guard 'git push -f origin @{upstream}'
+expect 2 "blocks force-push, push-option, no branch" guard 'git push -f origin -o ci.skip'
+expect 0 "allows force-push HEAD:feature" guard 'git push -f origin HEAD:feature-x'
+expect 0 "allows force-push branch + push-option" guard 'git push -f origin feature-x -o ci.skip'
 expect 0 "allows force-push feature"  guard 'git push --force origin feature-x'
 expect 0 "allows plain push main"     guard 'git push origin main'
 expect 0 "allows mention in echo"     guard 'echo the merge command is dangerous'
@@ -97,6 +108,26 @@ out=$(kit_env bash "$H/.local/bin/model-pin-guard" 2>&1)
 echo "== knowledge layer =="
 kit_env python3 "$R/knowledge/scripts/validate.py" >/dev/null && ok "validate.py seed docs" || bad "validate.py seed docs"
 kit_env python3 "$H/.local/bin/kb-index" | grep -q 'indexed 2 docs' && ok "kb-index" || bad "kb-index"
+# A '#' inside a quoted frontmatter value is content, not a comment.
+cat > "$R/knowledge/projects/shared/runbooks/hash-title.md" <<'EOF'
+---
+id: shared/runbooks/hash-title
+kind: runbook
+status: active
+title: "Design #1 and #2 spec"
+---
+body
+EOF
+kit_env python3 "$H/.local/bin/kb-index" >/dev/null
+title=$(kit_env python3 - "$R/.index/index.db" <<'EOF'
+import sqlite3, sys
+con = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)
+print(con.execute("SELECT title FROM docs WHERE id='shared/runbooks/hash-title'").fetchone()[0])
+EOF
+)
+[ "$title" = "Design #1 and #2 spec" ] && ok "quoted '#' title preserved" || bad "quoted '#' title preserved (got: $title)"
+kit_env python3 "$R/knowledge/scripts/validate.py" >/dev/null && ok "validate.py accepts '#' title" || bad "validate.py accepts '#' title"
+rm "$R/knowledge/projects/shared/runbooks/hash-title.md"
 
 echo "== team site =="
 mkdir -p "$R/agent-runs/2026-01-15/co-demo-1830"

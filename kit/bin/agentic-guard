@@ -38,9 +38,12 @@ block() {
   exit 2
 }
 
-# PR merge via gh, anywhere in the command line — a quote counts as a boundary,
-# so `bash -c "gh pr merge 1"` and `eval 'gh pr merge 1'` are caught too.
-printf '%s' "$cmd" | grep -Eq "(^|[;&|(\`'\"[:space:]=])gh[[:space:]]+pr[[:space:]]+merge([[:space:]]|$|['\"])" \
+# PR merge via gh, anywhere in the command line. Both boundaries are "any
+# non-word character (or line edge)", so every wrapping an agent might emit is
+# caught: a quote (`bash -c "gh pr merge 1"`, `eval 'gh pr merge 1'`), a chain
+# operator (`... ; gh pr merge`, `gh pr merge && ...`), a subshell
+# (`$(gh pr merge)`), a pipe, or a bare `gh pr merge` with no PR number at EOL.
+printf '%s' "$cmd" | grep -Eq '(^|[^a-zA-Z0-9_])gh[[:space:]]+pr[[:space:]]+merge($|[^a-zA-Z0-9_])' \
   && block "merging a pull request."
 
 # Force-push. Two rules:
@@ -56,6 +59,9 @@ if printf '%s' "$cmd" | grep -Eq '(^|[;&|(`'"'"'"[:space:]])git[[:space:]][^;&|]
   n_args=$(printf '%s\n' "$cmd" | python3 -c '
 import re, sys
 cmd = sys.stdin.read()
+# Push flags that consume the NEXT token as their value — their argument must
+# not be miscounted as a branch (git push -f origin -o ci.skip has no branch).
+VALUE_FLAGS = {"-o", "--push-option", "--repo", "--receive-pack", "--exec"}
 worst = 99
 for seg in re.split(r"[;&|]", cmd):
     m = re.search(r"\bgit\s+(?:\S+\s+)*?push\s+(.*)", seg)
@@ -63,7 +69,23 @@ for seg in re.split(r"[;&|]", cmd):
         continue
     if not re.search(r"\s-[a-zA-Z]*f\b|--force", seg):
         continue
-    args = [a for a in m.group(1).split() if not a.startswith("-")]
+    args, skip = [], False
+    for tok in m.group(1).split():
+        if skip:                      # this token is a prior flag value
+            skip = False
+            continue
+        if tok in VALUE_FLAGS:
+            skip = True
+            continue
+        if tok.startswith("-"):       # a flag (incl. --opt=value inline form)
+            continue
+        # Symbolic refs to the current branch are NOT an explicit branch name:
+        # git push -f origin HEAD force-pushes whatever is checked out. A colon
+        # refspec (src:dst) names its destination and stays counted — a
+        # protected dst is already caught by the main/master name check.
+        if re.fullmatch(r"HEAD|@|@\{[^}]*\}", tok):
+            continue
+        args.append(tok)
     worst = min(worst, len(args))
 print(worst if worst != 99 else 2)
 ' 2>/dev/null || echo 0)
