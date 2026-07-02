@@ -70,9 +70,13 @@ echo "== agentic-guard =="
 guard() { printf '{"tool_input":{"command":"%s"}}' "$1" | kit_env bash "$H/.local/bin/agentic-guard"; }
 expect 2 "blocks pr merge"            guard 'gh pr merge 42'
 expect 2 "blocks pr merge in chain"   guard 'cd /x && gh pr merge 42 --squash'
+expect 2 "blocks quoted pr merge (bash -c)" guard 'bash -c \"gh pr merge 42\"'
+expect 2 "blocks quoted pr merge (eval)"    guard "eval 'gh pr merge 42'"
 expect 2 "blocks force-push main"     guard 'git push --force origin main'
 expect 2 "blocks -f master"           guard 'git push -f origin master'
 expect 2 "blocks force-with-lease main" guard 'git push --force-with-lease origin main'
+expect 2 "blocks bare force-push"     guard 'git push -f'
+expect 2 "blocks force-push remote-only" guard 'git push --force origin'
 expect 0 "allows force-push feature"  guard 'git push --force origin feature-x'
 expect 0 "allows plain push main"     guard 'git push origin main'
 expect 0 "allows mention in echo"     guard 'echo the merge command is dangerous'
@@ -96,7 +100,19 @@ kit_env python3 "$H/.local/bin/kb-index" | grep -q 'indexed 2 docs' && ok "kb-in
 
 echo "== team site =="
 mkdir -p "$R/agent-runs/2026-01-15/co-demo-1830"
-printf '# Handoff\n\n- item one\n' > "$R/agent-runs/2026-01-15/co-demo-1830/handoff.md"
+printf '%s\n' '# Handoff' '' '- item one' '' '[link](https://example.com/"onmouseover="alert(1))' \
+  > "$R/agent-runs/2026-01-15/co-demo-1830/handoff.md"
+cat > "$R/knowledge/projects/shared/runbooks/xss-probe.md" <<'EOF'
+---
+id: shared/runbooks/xss-probe
+kind: runbook
+status: draft
+title: xss probe fixture
+---
+
+<script>alert("frontmatter probe")</script> searchable-marker-word
+EOF
+kit_env python3 "$H/.local/bin/kb-index" >/dev/null
 PORT=8399
 kit_env env AGENTIC_SITE_PORT=$PORT python3 "$H/.local/bin/agentic-site" >/dev/null 2>&1 &
 SITE=$!
@@ -110,6 +126,16 @@ for p in / /activity /kb "/kb?q=frontmatter" /cockpit; do
 done
 curl -s "http://127.0.0.1:$PORT/handoff?p=/etc/hosts" | grep -q 'Not a handoff path' \
   && ok "handoff path traversal rejected" || bad "handoff path traversal rejected"
+hf_page=$(curl -s "http://127.0.0.1:$PORT/handoff?p=$R/agent-runs/2026-01-15/co-demo-1830/handoff.md")
+printf '%s' "$hf_page" | grep -q 'onmouseover="alert' \
+  && bad "href XSS escaped" || ok "href XSS escaped"
+kb_page=$(curl -s "http://127.0.0.1:$PORT/kb?q=searchable-marker-word")
+printf '%s' "$kb_page" | grep -q '<script>alert' \
+  && bad "snippet XSS escaped" || ok "snippet XSS escaped"
+printf '%s' "$kb_page" | grep -q '<b>' \
+  && ok "snippet highlight kept" || bad "snippet highlight kept"
+curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/kb?q=%22broken(syntax" | grep -q 200 \
+  && ok "bad FTS query survives" || bad "bad FTS query survives"
 kill $SITE 2>/dev/null || true
 wait $SITE 2>/dev/null || true
 

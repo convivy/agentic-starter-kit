@@ -6,6 +6,7 @@ Run from anywhere: `python3 <knowledge>/scripts/validate.py`. Exits non-zero on
 any error, so it works as a pre-commit check.
 """
 import pathlib
+import re
 import sys
 
 KINDS = {"runbook", "decision", "reference", "agent", "profile"}
@@ -25,7 +26,10 @@ def frontmatter(text):
         if not line or line.startswith("#") or ":" not in line:
             continue
         key, _, value = line.partition(":")
-        fm[key.strip()] = value.split("#")[0].strip().strip("\"'")
+        # Strip a trailing comment (whitespace + #) without truncating values
+        # that legitimately contain '#' (titles, tags).
+        value = re.sub(r"\s+#.*$", "", value)
+        fm[key.strip()] = value.strip().strip("\"'")
     return fm
 
 

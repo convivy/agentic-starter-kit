@@ -64,8 +64,12 @@ command -v tmux >/dev/null 2>&1 || say "   note: tmux not found — optional, bu
 ROOT="$(confirm 'Install root' "$ROOT")"
 MODEL="$(confirm 'Pinned default model' "$MODEL")"
 case "$ROOT" in
+  "~")   ROOT="$HOME" ;;
+  "~/"*) ROOT="$HOME/${ROOT#\~/}" ;;
+esac
+case "$ROOT" in
   /*) : ;;
-  *) fail "--root must be an absolute path (got '$ROOT')" ;;
+  *) fail "install root must be an absolute path (got '$ROOT')" ;;
 esac
 say "   root:  $ROOT"
 say "   model: $MODEL"
@@ -103,8 +107,11 @@ else
   git -C "$ROOT/knowledge" add -A
   git -C "$ROOT/knowledge" commit -qm "knowledge: seed from agentic-starter-kit" || true
 fi
-rm -rf "$ROOT/product-template"
-cp -R "$KIT/product-template" "$ROOT/product-template"
+if [ -d "$ROOT/product-template" ]; then
+  say "   product-template/ exists — leaving it alone (delete it and re-run to refresh)"
+else
+  cp -R "$KIT/product-template" "$ROOT/product-template"
+fi
 
 # ---- 5 + 6. model pin + settings.json (pin + hooks), with backup ------------
 say "== pinning the model + registering hooks in ~/.claude/settings.json"

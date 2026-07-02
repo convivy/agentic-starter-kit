@@ -74,10 +74,11 @@ input[type=search] { font:inherit; padding:8px 12px; border:1px solid var(--line
 
 def md(text):
     """Small markdown-to-HTML: headings, fences, bullets, bold, code, links.
-    Escapes first, so doc content can't inject markup."""
+    Escapes first — with quote=True, so a crafted link URL can't break out of
+    the href attribute — and doc content can't inject markup."""
     out, in_code, in_list = [], False, False
     for raw in text.splitlines():
-        line = html.escape(raw, quote=False)
+        line = html.escape(raw, quote=True)
         if line.strip().startswith("```"):
             if in_list:
                 out.append("</ul>")
@@ -90,7 +91,7 @@ def md(text):
             continue
         line = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", line)
         line = re.sub(r"`([^`]+)`", r"<code>\1</code>", line)
-        line = re.sub(r"\[([^\]]+)\]\((https?://[^)]+)\)", r'<a href="\2">\1</a>', line)
+        line = re.sub(r"\[([^\]]+)\]\((https?://[^)\s]+)\)", r'<a href="\2">\1</a>', line)
         m = re.match(r"(#{1,4}) (.*)", line)
         if m:
             if in_list:
@@ -155,8 +156,12 @@ def kb_rows(query=None):
     con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
     try:
         if query:
+            # Sentinel highlight markers: the snippet text is doc content and
+            # must be HTML-escaped as a whole; the sentinels are swapped for
+            # real <b> tags after escaping (kb() does this).
             rows = con.execute(
-                "SELECT id, title, kind, snippet(docs, 6, '<b>', '</b>', ' … ', 16) "
+                "SELECT id, title, kind, "
+                "snippet(docs, 6, char(1), char(2), ' … ', 16) "
                 "FROM docs WHERE docs MATCH ? ORDER BY rank LIMIT 40", (query,)
             ).fetchall()
         else:
@@ -248,10 +253,12 @@ def kb(qs):
     else:
         body += "<ul class='plain'>"
         for doc_id, title, kind, snip in rows:
+            snip_html = (html.escape(snip, quote=True)
+                         .replace("\x01", "<b>").replace("\x02", "</b>")) if snip else ""
             body += (f"<li><a href='/kb/doc?id={urllib.parse.quote(doc_id)}'>"
                      f"{html.escape(title or doc_id)}</a> "
                      f"<span class='kind'>{html.escape(kind)}</span>"
-                     + (f"<div class='muted'>{snip}</div>" if snip else "")
+                     + (f"<div class='muted'>{snip_html}</div>" if snip_html else "")
                      + "</li>")
         body += "</ul>"
     return page("knowledge", "/kb", body)

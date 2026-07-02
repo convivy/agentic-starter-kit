@@ -26,12 +26,18 @@ def _con():
 def kb_search(query: str, limit: int = 8) -> list[dict]:
     """Full-text search the knowledge base. Returns id, title, kind, and a snippet."""
     con = _con()
-    rows = con.execute(
-        "SELECT id, title, kind, snippet(docs, 6, '[', ']', ' … ', 12) "
-        "FROM docs WHERE docs MATCH ? ORDER BY rank LIMIT ?",
-        (query, limit),
-    ).fetchall()
-    con.close()
+    try:
+        rows = con.execute(
+            "SELECT id, title, kind, snippet(docs, 6, '[', ']', ' … ', 12) "
+            "FROM docs WHERE docs MATCH ? ORDER BY rank LIMIT ?",
+            (query, limit),
+        ).fetchall()
+    except sqlite3.Error as e:
+        # FTS5 MATCH has its own query syntax; a stray quote or operator is a
+        # user error, not a crash.
+        return [{"error": f"bad search query ({e}); try plain words"}]
+    finally:
+        con.close()
     return [{"id": r[0], "title": r[1], "kind": r[2], "snippet": r[3]} for r in rows]
 
 
