@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# agentic-guard — PreToolUse hook: the human stays in the loop on irreversible,
+# outward-facing git actions. The harness runs this before every Bash tool call;
+# exit 2 blocks the call and returns the message to the agent.
+#
+# Blocks, in any segment of a compound command:
+#   - merging a pull request (gh pr merge), including quoted forms
+#     (bash -c "gh pr merge …", eval "gh pr merge …")
+#   - force-pushing that could touch main/master: any force-push that names
+#     main/master, and any force-push that names NO branch (a bare
+#     `git push -f` targets the current branch, which the hook can't see —
+#     over-blocking is the safe direction; name your feature branch explicitly)
+#
+# Scope, honestly stated: this catches the direct and lightly-wrapped forms an
+# agent actually emits — it is defense in depth on top of prompt-level rules,
+# not a sandbox. A determined adversary can compose a bypass; a confused agent
+# cannot stumble into one. Extend the guard as you discover new forms; harden
+# it rather than weakening it. If an agent is asked to merge, the right
+# behavior is to hand the operator the PR URL, not to reword the command until
+# it slips by.
+#
+# Fail-open on unparseable input is intentional: this hook gates convenience,
+# and a malformed harness payload must not brick every Bash call. The harness
+# itself is the trust boundary for the payload.
+set -u
+
+input="$(cat)"
+cmd="$(printf '%s' "$input" | python3 -c 'import json,sys
+try:
+    print(json.load(sys.stdin).get("tool_input", {}).get("command", ""))
+except Exception:
+    pass' 2>/dev/null || true)"
+
+[ -z "$cmd" ] && exit 0
+
+block() {
+  echo "BLOCKED by agentic-guard: $1 Ask the operator to do this manually." >&2
+  exit 2
+}
+
+# PR merge via gh, anywhere in the command line. Both boundaries are "any
+# non-word character (or line edge)", so every wrapping an agent might emit is
+# caught: a quote (`bash -c "gh pr merge 1"`, `eval 'gh pr merge 1'`), a chain
+# operator (`... ; gh pr merge`, `gh pr merge && ...`), a subshell
+# (`$(gh pr merge)`), a pipe, or a bare `gh pr merge` with no PR number at EOL.
+printf '%s' "$cmd" | grep -Eq '(^|[^a-zA-Z0-9_])gh[[:space:]]+pr[[:space:]]+merge($|[^a-zA-Z0-9_])' \
+  && block "merging a pull request."
+
+# Force-push. Two rules:
+#   1. names main/master anywhere -> block (over-matches branch names that
+#      merely contain the word; that is the safe direction for a guard)
+#   2. names no branch at all -> block (the target is the current branch,
+#      which this hook cannot verify)
+if printf '%s' "$cmd" | grep -Eq '(^|[;&|(`'"'"'"[:space:]])git[[:space:]][^;&|]*push[^;&|]*([[:space:]]-[a-zA-Z]*f|--force)'; then
+  printf '%s' "$cmd" | grep -Eq '\b(main|master)\b' \
+    && block "force-pushing to a protected branch."
+  # Count non-flag args after `push` in the offending segment: fewer than two
+  # (remote + branch) means no explicit target branch.
+  n_args=$(printf '%s\n' "$cmd" | python3 -c '
+import re, sys
+cmd = sys.stdin.read()
+# Push flags that consume the NEXT token as their value — their argument must
+# not be miscounted as a branch (git push -f origin -o ci.skip has no branch).
+VALUE_FLAGS = {"-o", "--push-option", "--repo", "--receive-pack", "--exec"}
+worst = 99
+for seg in re.split(r"[;&|]", cmd):
+    m = re.search(r"\bgit\s+(?:\S+\s+)*?push\s+(.*)", seg)
+    if not m:
+        continue
+    if not re.search(r"\s-[a-zA-Z]*f\b|--force", seg):
+        continue
+    args, skip = [], False
+    for tok in m.group(1).split():
+        if skip:                      # this token is a prior flag value
+            skip = False
+            continue
+        if tok in VALUE_FLAGS:
+            skip = True
+            continue
+        if tok.startswith("-"):       # a flag (incl. --opt=value inline form)
+            continue
+        # Symbolic refs to the current branch are NOT an explicit branch name:
+        # git push -f origin HEAD force-pushes whatever is checked out. A colon
+        # refspec (src:dst) names its destination and stays counted — a
+        # protected dst is already caught by the main/master name check.
+        if re.fullmatch(r"HEAD|@|@\{[^}]*\}", tok):
+            continue
+        args.append(tok)
+    worst = min(worst, len(args))
+print(worst if worst != 99 else 2)
+' 2>/dev/null || echo 0)
+  [ "$n_args" -lt 2 ] && block "force-pushing with no explicit branch (the current branch might be protected — name the branch)."
+fi
+
+exit 0
