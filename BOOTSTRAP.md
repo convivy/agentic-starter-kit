@@ -13,7 +13,7 @@ cd agentic-starter-kit
 The installer confirms two choices with you:
 
 - **Install root** (default `~/agentic`) — everything lives under it. If you pick another path, export `AGENTIC_ROOT` in your shell profile.
-- **Pinned model** (default `claude-sonnet-5`) — the model every session launches on unless you explicitly override it. Sonnet is the right default: capable for nearly all development work and far cheaper against your plan's usage limits. Pin `claude-opus-4-8` instead if you're on a Max plan and want the frontier tier as your daily driver; either way, the rule is that the pin is *explicit*. An unpinned CLI default once silently switched to a premium model on our system and burned a subscription plus real money in a day — the kit's `model-pin-guard` hook exists because of that day.
+- **Pinned model** (default `claude-sonnet-5`) — the model every session launches on unless you explicitly override it. Sonnet is the right default, capable for nearly all development work and far cheaper against your plan's usage limits. Pin `claude-opus-4-8` instead if you're on a Max plan and want the frontier tier as your daily driver; either way, the rule is that the pin is *explicit*. An unpinned CLI default once silently switched to a premium model on our system and burned a subscription plus real money in a day. The kit's `model-pin-guard` hook exists because of that day.
 
 Re-running the installer is safe: it refreshes the kit's binaries and never touches your cockpit, knowledge repo, or data.
 
@@ -45,7 +45,7 @@ You just opened the **steward** — the co that tends the system itself. Say hel
 - **A product co** (`cd <your-repo> && co`) — for anything about a *product*: features, bugs, refactors, PRs. Give a repo a charter by copying the template: `cp -R ~/agentic/product-template/CLAUDE.md ~/agentic/product-template/.claude <your-repo>/` and editing the CLAUDE.md header.
 - **A role** (`co researcher`) — a one-off specialist loaded from `knowledge/projects/shared/agents/`. Add roles as files there.
 
-The rule of thumb: the steward improves the machine, product co's use the machine.
+As a rule of thumb, the steward improves the machine; product co's use it.
 
 ## 4. `co -r` — refresh and resume
 
@@ -58,7 +58,7 @@ Use plain `co` for a fresh start; use `co -r` when you're continuing yesterday's
 
 ## 5. Compaction and `/handoff-leave`
 
-A long session eventually outgrows its context window; Claude Code then **compacts** — summarizes older conversation to make room. Compaction is lossy. The defense is the handoff habit:
+A long session eventually outgrows its context window; Claude Code then **compacts**, summarizing older conversation to make room. Compaction is lossy. The defense is the handoff habit:
 
 - Before ending a session with work in flight, say `/handoff-leave`. The session writes a dated handoff doc — state, in-flight items, decisions, a recommended next move — under `agent-runs/`.
 - The next session (via `co -r` or `/handoff-pickup`) reads it and resumes without re-deriving anything.
@@ -86,7 +86,7 @@ open http://127.0.0.1:8321
 
 Four pages: **Overview** (stat tiles, the latest handoff, the backlog head), **Activity** (sessions and handoffs by day), **Knowledge** (browse + full-text search the KB), **Cockpit** (the backlog and decision log, rendered).
 
-The purpose of the dashboards: an agentic system does real work while you are not watching, and a system you can't inspect is a system you stop trusting. The site answers "what has it been doing, what did it decide, and what does it know" at a glance — for you, and for anyone you're showing the system to. As your system grows (workers, overnight runs, cost telemetry), grow the site to match; on our system the equivalent pages became the primary way the operator supervises everything.
+The dashboards exist because an agentic system does real work while you are not watching, and a system you can't inspect is a system you stop trusting. The site answers "what has it been doing, what did it decide, and what does it know" at a glance, for you and for anyone you're showing the system to. As your system grows (workers, overnight runs, cost telemetry), grow the site to match; on our system the equivalent pages became the primary way the operator supervises everything.
 
 ## 8. Verify, then go
 

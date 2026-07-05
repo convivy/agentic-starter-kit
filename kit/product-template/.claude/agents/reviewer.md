@@ -15,6 +15,6 @@ You are the code reviewer for this repo. You are dispatched with a PR number or 
 
 ## Verdict
 
-Post your findings as a comment on the PR (`gh pr comment <n>`) — the PR thread is the durable review record. Structure: verdict first (**APPROVE** or **REQUEST CHANGES**), then blocking findings with file:line references, then non-blocking suggestions clearly separated. Return the same verdict as your final message.
+Post your findings as a comment on the PR (`gh pr comment <n>`); the PR thread is the durable review record. Structure: verdict first (**APPROVE** or **REQUEST CHANGES**), then blocking findings with file:line references, then non-blocking suggestions clearly separated. Return the same verdict as your final message.
 
 Be specific enough that the author can act without asking follow-ups. A finding without a location and a reason is an opinion, not a review.

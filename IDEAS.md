@@ -1,6 +1,6 @@
 # IDEAS — where to take your system next
 
-Everything below runs today on the system this kit was distilled from. None of it ships prebuilt, deliberately: each item earns its place when *your* friction demands it, and building it with your steward is how your system becomes yours (see EXTENDING.md). Every idea ends with a prompt you can hand the steward verbatim.
+Everything below runs today on the system this kit was distilled from. None of it ships prebuilt, deliberately; each item earns its place when *your* friction demands it, and building it with your steward is how your system becomes yours (see EXTENDING.md). Every idea ends with a prompt you can hand the steward verbatim.
 
 Ordered roughly by how early we needed each one.
 
@@ -18,7 +18,7 @@ Run every co inside tmux on the always-on box, and reach it from anywhere with [
 
 ## 3. Overnight orchestration
 
-The largest single upgrade we ever made: an orchestrator that runs a work queue while you sleep. The shape that works — a nightly scheduled job (launchd/systemd) launches a headless orchestrator (`claude -p`); it drains a queue of well-specified tasks by dispatching worker sessions, **each in its own git worktree** so parallel workers never collide; every worker opens a PR; every PR gets the review cycle; nothing merges — you wake to a queue of reviewed PRs and triage over coffee. Start small: one product, two workers, a hard budget cap. The human-merges rule is what makes this safe to run unattended.
+The largest single upgrade we ever made was an orchestrator that runs a work queue while you sleep. The shape that works: a nightly scheduled job (launchd/systemd) launches a headless orchestrator (`claude -p`); it drains a queue of well-specified tasks by dispatching worker sessions, **each in its own git worktree** so parallel workers never collide; every worker opens a PR; every PR gets the review cycle; nothing merges, so you wake to a queue of reviewed PRs and triage over coffee. Start small: one product, two workers, a hard budget cap. The human-merges rule is what makes this safe to run unattended.
 
 > *"Design a minimal overnight orchestrator for my system: a task queue file, a nightly scheduled job that dispatches N headless workers in git worktrees, PRs + the review cycle for everything, a hard spend/turn cap, and a morning summary. Propose the design first; build after I approve."*
 
@@ -30,19 +30,19 @@ Once anything runs while you're not watching, it needs a place to tell you. A Sl
 
 ## 5. Phone alerts for runaway spending (ntfy)
 
-Autonomous work can fail expensive — a looping agent, a mispinned model, a leaked API key silently billing pay-as-you-go. [ntfy.sh](https://ntfy.sh) gives you free push notifications with one `curl`; pair it with a periodic spend check (e.g. [ccusage](https://github.com/ryoppippi/ccusage) reads Claude Code's local logs) and a threshold, and your phone buzzes *during* the incident instead of the bill telling you next month. Our version of this lesson cost real money each time we learned it; the alert is cheap insurance.
+Autonomous work can fail expensive: a looping agent, a mispinned model, a leaked API key silently billing pay-as-you-go. [ntfy.sh](https://ntfy.sh) gives you free push notifications with one `curl`; pair it with a periodic spend check (e.g. [ccusage](https://github.com/ryoppippi/ccusage) reads Claude Code's local logs) and a threshold, and your phone buzzes *during* the incident instead of the bill telling you next month. Our version of this lesson cost real money each time we learned it; the alert is cheap insurance.
 
 > *"Add a spend watchdog: every 30 minutes, estimate today's token spend from local usage data, compare against a daily threshold, and push an ntfy alert if it's exceeded — plus an immediate alert if ANTHROPIC_API_KEY ever appears in a session environment. Make the checks visible on the team site."*
 
 ## 6. Experiment with gateway models
 
-A [LiteLLM](https://github.com/BerriAI/litellm) proxy on localhost lets a co or a worker run against other providers — DeepSeek, Kimi, GPT — through the same Anthropic-shaped API: `ANTHROPIC_BASE_URL` points at the proxy, and `co -m deepseek` becomes a real option. Where it earned its keep for us: cheap mechanical work (log summarization, scribe tasks) routed to a budget model while judgment work stays on Claude. Where it didn't: fallback chains that mask provider errors. Keep it fail-closed — an unknown model name should error, never silently substitute.
+A [LiteLLM](https://github.com/BerriAI/litellm) proxy on localhost lets a co or a worker run against other providers — DeepSeek, Kimi, GPT — through the same Anthropic-shaped API: `ANTHROPIC_BASE_URL` points at the proxy, and `co -m deepseek` becomes a real option. It earned its keep for us on cheap mechanical work (log summarization, scribe tasks) routed to a budget model while judgment work stays on Claude. It did not on fallback chains that mask provider errors. Keep it fail-closed: an unknown model name should error, never silently substitute.
 
 > *"Stand up a local LiteLLM gateway with one budget model behind it, teach `co -m <name>` to route through it, and pick one recurring mechanical task to move there as the pilot. Track its spend separately so we can judge the trade."*
 
 ## 7. Make the knowledge base an always-on service
 
-The kit ships `kb-watch` as a foreground script; promote it to a login service (launchd on macOS, `systemd --user` on Linux) so the index is simply never stale. This is also the natural first service to build with your steward — small, low-risk, and it teaches the service pattern (absolute paths, thin environments, logs somewhere findable) that overnight orchestration reuses.
+The kit ships `kb-watch` as a foreground script; promote it to a login service (launchd on macOS, `systemd --user` on Linux) so the index is simply never stale. This is also the natural first service to build with your steward: small, low-risk, and it teaches the service pattern (absolute paths, thin environments, logs somewhere findable) that overnight orchestration reuses.
 
 > *"Make kb-watch a login service on this machine, with logs I can find and a one-line health check. Then add a KB health tile to the team site."*
 
@@ -54,7 +54,7 @@ Recurring habits worth automating once they're habits: a nightly KB validation s
 
 ## 9. Grow the team site
 
-The kit's site shows sessions, handoffs, knowledge, and the cockpit. Ours grew into live spending and cost-performance dashboards, agent-velocity and health views, and a browsable rendering of every decision ever recorded — it became the way the operator supervises the whole platform. Grow yours toward whatever question you keep asking in a terminal: every "wait, what did it do yesterday?" is a page request.
+The kit's site shows sessions, handoffs, knowledge, and the cockpit. Ours grew into live spending and cost-performance dashboards, agent-velocity and health views, and a browsable rendering of every decision ever recorded; it became the way the operator supervises the whole platform. Grow yours toward whatever question you keep asking in a terminal: every "wait, what did it do yesterday?" is a page request.
 
 > *"Add a page to agentic-site that shows <the question you keep asking>, reading from the data the system already produces."*
 

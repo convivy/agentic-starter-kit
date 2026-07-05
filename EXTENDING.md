@@ -6,9 +6,9 @@ Open the steward (`cd ~/agentic/substrate && co`), describe the friction or the 
 
 ## Why this works
 
-The breakthrough most people are one realization away from: **you can partner with the LLM to develop the system that includes the LLM.** Claude Code isn't only a tool your environment invokes — it's a competent systems engineer sitting *inside* that environment, with full knowledge of its own harness: hooks, MCP servers, subagents, headless mode, settings. When you ask it to extend the system, it is extending something it understands from the inside and will itself run on tomorrow. Better hooks make its future sessions safer; better docs make them smarter; better dashboards make them inspectable. The loop compounds.
+The breakthrough most people are one realization away from: **you can partner with the LLM to develop the system that includes the LLM.** Claude Code isn't only a tool your environment invokes; it's a competent systems engineer sitting *inside* that environment, with full knowledge of its own harness: hooks, MCP servers, subagents, headless mode, settings. When you ask it to extend the system, it is extending something it understands from the inside and will itself run on tomorrow. Better hooks make its future sessions safer; better docs make them smarter; better dashboards make them inspectable. The loop compounds.
 
-This is why the kit ships lean and IDEAS.md ships as prose instead of code. A prebuilt overnight orchestrator would fit our machine, our products, our risk tolerance. The one you build with your steward in an afternoon fits yours — and the building teaches you both how it works, which is what you'll need the day it misbehaves.
+This is why the kit ships lean and IDEAS.md ships as prose instead of code. A prebuilt overnight orchestrator would fit our machine, our products, our risk tolerance. The one you build with your steward in an afternoon fits yours, and the building teaches you both how it works, which is what you'll need the day it misbehaves.
 
 ## The method
 
