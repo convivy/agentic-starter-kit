@@ -28,7 +28,7 @@ The "substrate" is everything the work is built *from*, as opposed to the work p
   and keeps the whole thing healthy.
 
 One directory, the **cockpit**, holds the *meta*: the steward's charter, an intake backlog, a
-decision log, and session handoffs. The cockpit holds the map, the rest of the system is the
+decision log, and session handoffs. The cockpit holds the map; the rest of the system is the
 territory. Never move real machinery (KB data, binaries, run artifacts) *into* the cockpit; each
 of those has its own home, defined below.
 
@@ -686,7 +686,7 @@ demands it. When that happens, the steward designs it, records the decision, and
 - **Multi-provider gateway.** Only if cost or availability forces routing some work to non-Claude
   models. Until then, Claude-only is simpler and fine.
 
-The discipline: a lean core that works, grown deliberately. That is the whole philosophy.
+The discipline is a lean core that works, grown deliberately. That is the whole philosophy.
 
 ---
 

@@ -46,7 +46,7 @@ Everything lives under one root (default `~/agentic`):
 
 Binaries land in `~/.local/bin` (`co`, `agentic-guard`, `model-pin-guard`, `kb-index`, `kb-watch`, `agentic-site`); the MCP server in `~/.local/lib/agentic`.
 
-The design bias throughout: a lean core that works, grown deliberately. The kit ships the foundation — ergonomics, safety, memory, observability — and defers workers, schedulers, and comms until a real, repeated need appears. When it does, see EXTENDING.md.
+The design bias throughout is a lean core that works, grown deliberately. The kit ships the foundation — ergonomics, safety, memory, observability — and defers workers, schedulers, and comms until a real, repeated need appears. When it does, see EXTENDING.md.
 
 ## License
 
