@@ -117,7 +117,10 @@ def _live_runs_segment(cwd):
         return ""
     live = [r for r in runs if _pid_alive(r.get("pid"))]
     product = _product_from_cwd(cwd)
-    scoped = bool(product) and product != "cockpit"
+    # The cockpit session (install.sh seeds it to $AGENTIC_ROOT/substrate) may
+    # dispatch across repos, so it keeps the fleet-wide view; every product co
+    # sees only its own repo's runs. Sentinel must match the cockpit dir name.
+    scoped = bool(product) and product != "substrate"
     if scoped:
         live = [r for r in live if str(r.get("repo")) == product]
     if not live:
@@ -130,9 +133,8 @@ def _live_runs_segment(cwd):
     return f"  {CYAN}⚙ {len(agents)} in flight{tag}: {shown}{RESET}"
 
 
-def main():
-    p = _read_payload()
-    cw = p.get("context_window") or {}
+def _render(p):
+    cw = p.get("context_window") if isinstance(p.get("context_window"), dict) else {}
     toks, size, pct = _ctx_tokens(cw)
     win = _fmt_k(size) if size else "?"
     model = _model_label(p)
@@ -149,7 +151,17 @@ def main():
         line = f"{DIM}◷ {gauge}{RESET}"
 
     line += _live_runs_segment(p.get("cwd") or (p.get("workspace") or {}).get("current_dir"))
-    sys.stdout.write(prefix + line)
+    return prefix + line
+
+
+def main():
+    # Never emit a broken status line: any unexpected payload shape falls back to
+    # nothing rather than a traceback on Jay's prompt line.
+    try:
+        out = _render(_read_payload())
+    except Exception:
+        out = ""
+    sys.stdout.write(out)
 
 
 if __name__ == "__main__":

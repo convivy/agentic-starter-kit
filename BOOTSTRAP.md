@@ -37,6 +37,8 @@ co
 
 A **co** is one Claude Code session opened in a particular directory whose `CLAUDE.md` defines its job. `co` (the launcher) adds the discipline: an explicit pinned model every time, a named + colored tmux window when you're inside tmux, and the refresh/resume behavior below.
 
+A co launches in **auto-accept mode** (`--permission-mode acceptEdits`): file edits apply without a prompt, but Bash commands still ask. To stop Bash prompting too, ask the co mid-session to switch to `bypassPermissions` — the `agentic-guard` hook still blocks dangerous Bash (like a force-push to `main`) even then. The first launch prints a note explaining this; `co --hush-note` silences it. The **status line** shows the running model, a context gauge that warns you to hand off before long-context quality degrades, and any dispatched agent runs in flight.
+
 You just opened the **steward** — the co that tends the system itself. Say hello; ask it what it can see. Its charter (`substrate/CLAUDE.md`) tells it to capture friction you flag into `backlog.md`, record design choices in `decisions.md`, and grow the system with you.
 
 **Which co do I open when?**

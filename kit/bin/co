@@ -13,6 +13,12 @@
 #   co -m <model>       one-session model override (explicit, operator-chosen)
 #   co <role>           launch with a role from knowledge/projects/shared/agents/<role>.md
 #   co <role> "prompt"  role + initial prompt
+#   co --hush-note      silence the one-time auto-accept-mode note, then launch
+#
+# co launches in auto-accept mode (--permission-mode acceptEdits): file edits
+# apply without a prompt; Bash still asks. Ask the co mid-session to switch to
+# bypassPermissions to stop Bash prompts too — the agentic-guard hook still
+# blocks dangerous Bash (e.g. force-push to main) even under bypass.
 #
 # The model rule, learned the expensive way: NEVER let a session inherit the
 # CLI's built-in default. An unpinned default once silently switched to a

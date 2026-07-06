@@ -83,6 +83,24 @@ sl_out=$(printf '%s' '{"model":{"display_name":"Sonnet 5"},"context_window":{"co
 printf '%s' "$sl_out" | grep -q 'Sonnet 5' && ok "status line shows model" || bad "status line shows model"
 printf '%s' "$sl_out" | grep -q 'ctx ' && ok "status line shows ctx gauge" || bad "status line shows ctx gauge"
 
+# live in-flight runs: fixture with one alive (this shell), one dead pid, two repos.
+mkdir -p "$R/agent-runs"
+cat > "$R/agent-runs/active.json" <<EOF
+{"runs":[{"pid":$$,"agent":"coder","repo":"myapp"},{"pid":2147483646,"agent":"ghost","repo":"myapp"},{"pid":$$,"agent":"reviewer","repo":"other"}]}
+EOF
+# cockpit dir (install.sh names it 'substrate') → fleet-wide view across repos.
+# This is the assertion that would have caught the 'cockpit'-vs-'substrate' sentinel bug.
+fleet=$(printf '{"cwd":"%s/substrate"}' "$R" | kit_env python3 "$H/.local/bin/co-session-health")
+printf '%s' "$fleet" | grep -q '2 in flight (fleet)' && ok "cockpit sees fleet-wide in-flight" || bad "cockpit sees fleet-wide in-flight"
+# a product co scopes to its own repo; the dead pid is filtered out.
+scoped=$(printf '{"cwd":"%s/myapp"}' "$R" | kit_env python3 "$H/.local/bin/co-session-health")
+printf '%s' "$scoped" | grep -q '1 in flight' && ok "product co scopes in-flight to its repo" || bad "product co scopes in-flight to its repo"
+printf '%s' "$scoped" | grep -q 'fleet' && bad "product view not labeled fleet" || ok "product view not labeled fleet"
+# crash-proof: a well-formed-but-wrong-shape payload emits no traceback.
+crash=$(printf '{"model":"not-a-dict","context_window":"nope"}' | kit_env python3 "$H/.local/bin/co-session-health" 2>&1)
+printf '%s' "$crash" | grep -qiE 'traceback|attributeerror' && bad "status line crash-proof" || ok "status line crash-proof"
+rm -f "$R/agent-runs/active.json"
+
 echo "== agentic-guard =="
 guard() { printf '{"tool_input":{"command":"%s"}}' "$1" | kit_env bash "$H/.local/bin/agentic-guard"; }
 expect 2 "blocks pr merge"            guard 'gh pr merge 42'
