@@ -49,6 +49,8 @@ kit_env bash "$REPO/install.sh" --yes >/dev/null 2>&1 || bad "install.sh --yes"
 [ -f "$R/substrate/CLAUDE.md" ] && ok "cockpit seeded" || bad "cockpit seeded"
 [ -f "$R/.model-pin" ] && ok "model pin written" || bad "model pin written"
 grep -q '"model": "claude-sonnet-5"' "$H/.claude/settings.json" && ok "settings pin" || bad "settings pin"
+[ -x "$H/.local/bin/co-session-health" ] && ok "status line installed" || bad "status line installed"
+grep -q 'co-session-health' "$H/.claude/settings.json" && ok "status line wired in settings" || bad "status line wired in settings"
 
 kit_env bash "$REPO/install.sh" --yes >/dev/null 2>&1 || bad "install.sh rerun"
 n_guard=$(grep -c 'agentic-guard' "$H/.claude/settings.json" || true)
@@ -57,14 +59,47 @@ n_guard=$(grep -c 'agentic-guard' "$H/.claude/settings.json" || true)
 echo "== co launch paths =="
 rm -f "$H/claude-shim.log"
 (cd "$R/substrate" && kit_env bash "$H/.local/bin/co")
-grep -q 'ARGS: --model claude-sonnet-5$' "$H/claude-shim.log" && ok "co pins the model" || bad "co pins the model"
+grep -q 'ARGS: --model claude-sonnet-5 --permission-mode acceptEdits$' "$H/claude-shim.log" && ok "co pins the model + auto-accept" || bad "co pins the model + auto-accept"
 (cd "$R/substrate" && kit_env bash "$H/.local/bin/co" -m other-model)
 grep -q 'ARGS: --model other-model' "$H/claude-shim.log" && ok "co -m overrides" || bad "co -m overrides"
 (cd "$R/substrate" && kit_env bash "$H/.local/bin/co" -r)
-grep -q 'ARGS: --model claude-sonnet-5 /handoff-pickup' "$H/claude-shim.log" && ok "co -r resumes" || bad "co -r resumes"
+grep -q 'ARGS: --model claude-sonnet-5 --permission-mode acceptEdits /handoff-pickup' "$H/claude-shim.log" && ok "co -r resumes" || bad "co -r resumes"
 (cd "$R/substrate" && kit_env bash "$H/.local/bin/co" researcher)
 grep -q 'append-system-prompt' "$H/claude-shim.log" && ok "co <role> loads role" || bad "co <role> loads role"
 expect 1 "co unknown role errors" env HOME="$H" AGENTIC_ROOT="$R" PATH="$H/bin:$ORIG_PATH" bash "$H/.local/bin/co" nosuchrole
+
+echo "== auto-accept note (squelchable) =="
+rm -f "$R/.automode-note-hushed"
+note_out=$(cd "$R/substrate" && kit_env bash "$H/.local/bin/co" 2>&1 >/dev/null)
+printf '%s' "$note_out" | grep -q 'AUTO-ACCEPT mode' && ok "note prints on launch" || bad "note prints on launch"
+# --hush-note creates the flag and silences future launches
+(cd "$R/substrate" && kit_env bash "$H/.local/bin/co" --hush-note) >/dev/null 2>&1
+[ -f "$R/.automode-note-hushed" ] && ok "--hush-note sets the flag" || bad "--hush-note sets the flag"
+note_out2=$(cd "$R/substrate" && kit_env bash "$H/.local/bin/co" 2>&1 >/dev/null)
+printf '%s' "$note_out2" | grep -q 'AUTO-ACCEPT mode' && bad "note silenced after hush" || ok "note silenced after hush"
+
+echo "== co-session-health status line =="
+sl_out=$(printf '%s' '{"model":{"display_name":"Sonnet 5"},"context_window":{"context_window_size":200000,"used_percentage":12}}' | kit_env python3 "$H/.local/bin/co-session-health")
+printf '%s' "$sl_out" | grep -q 'Sonnet 5' && ok "status line shows model" || bad "status line shows model"
+printf '%s' "$sl_out" | grep -q 'ctx ' && ok "status line shows ctx gauge" || bad "status line shows ctx gauge"
+
+# live in-flight runs: fixture with one alive (this shell), one dead pid, two repos.
+mkdir -p "$R/agent-runs"
+cat > "$R/agent-runs/active.json" <<EOF
+{"runs":[{"pid":$$,"agent":"coder","repo":"myapp"},{"pid":2147483646,"agent":"ghost","repo":"myapp"},{"pid":$$,"agent":"reviewer","repo":"other"}]}
+EOF
+# cockpit dir (install.sh names it 'substrate') → fleet-wide view across repos.
+# This is the assertion that would have caught the 'cockpit'-vs-'substrate' sentinel bug.
+fleet=$(printf '{"cwd":"%s/substrate"}' "$R" | kit_env python3 "$H/.local/bin/co-session-health")
+printf '%s' "$fleet" | grep -q '2 in flight (fleet)' && ok "cockpit sees fleet-wide in-flight" || bad "cockpit sees fleet-wide in-flight"
+# a product co scopes to its own repo; the dead pid is filtered out.
+scoped=$(printf '{"cwd":"%s/myapp"}' "$R" | kit_env python3 "$H/.local/bin/co-session-health")
+printf '%s' "$scoped" | grep -q '1 in flight' && ok "product co scopes in-flight to its repo" || bad "product co scopes in-flight to its repo"
+printf '%s' "$scoped" | grep -q 'fleet' && bad "product view not labeled fleet" || ok "product view not labeled fleet"
+# crash-proof: a well-formed-but-wrong-shape payload emits no traceback.
+crash=$(printf '{"model":"not-a-dict","context_window":"nope"}' | kit_env python3 "$H/.local/bin/co-session-health" 2>&1)
+printf '%s' "$crash" | grep -qiE 'traceback|attributeerror' && bad "status line crash-proof" || ok "status line crash-proof"
+rm -f "$R/agent-runs/active.json"
 
 echo "== agentic-guard =="
 guard() { printf '{"tool_input":{"command":"%s"}}' "$1" | kit_env bash "$H/.local/bin/agentic-guard"; }
