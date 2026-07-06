@@ -50,9 +50,11 @@ case "${1:-}" in
 esac
 
 refresh=0
+hush=0
 while [ $# -gt 0 ]; do
   case "$1" in
     -r|--refresh) refresh=1; shift ;;
+    --hush-note)  hush=1; shift ;;
     -m|--model)
       if [ $# -lt 2 ]; then echo "co: $1 requires a model name" >&2; exit 1; fi
       MODEL="$2"; shift 2 ;;
@@ -96,8 +98,25 @@ if [ "$refresh" -eq 1 ]; then
   fi
 fi
 
+# Auto-accept mode note — printed once, then squelchable. This co launches with
+# --permission-mode acceptEdits: file edits apply without a prompt, but Bash still
+# asks. Tell the user how to go further (bypassPermissions) and that the safety
+# hook still holds even then, and how to silence this note.
+NOTE_FLAG="$ROOT/.automode-note-hushed"
+if [ "$hush" -eq 1 ]; then
+  : > "$NOTE_FLAG" 2>/dev/null || true
+  echo "co: auto-mode note silenced ($NOTE_FLAG)." >&2
+elif [ ! -f "$NOTE_FLAG" ]; then
+  {
+    echo "co: this session runs in AUTO-ACCEPT mode — file edits apply without a prompt; Bash still asks."
+    echo "    • Want Bash to stop prompting too? Ask me to \"switch to bypassPermissions\" mid-session."
+    echo "    • Even in bypassPermissions, the agentic-guard hook still blocks dangerous Bash (e.g. force-push to main)."
+    echo "    • Hide this note next time:  co --hush-note"
+  } >&2
+fi
+
 # A role preloads its system prompt from the KB agent file (frontmatter stripped).
-args=(--model "$MODEL")
+args=(--model "$MODEL" --permission-mode acceptEdits)
 if [ -n "$role" ]; then
   role_file="$ROOT/knowledge/projects/shared/agents/${role}.md"
   if [ ! -f "$role_file" ]; then

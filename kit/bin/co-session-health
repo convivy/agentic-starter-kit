@@ -1,0 +1,156 @@
+#!/usr/bin/env python3
+"""
+co-session-health — a Claude Code status line for a co session.
+
+Shows, every turn (quiet until it matters):
+  • the running model            — which model this co is on
+  • a context gauge              — in-context tokens / window, with a percentage
+  • a handoff warning            — as context fills, before quality degrades:
+        below SOFT   -> dim ambient gauge
+        SOFT .. HARD -> yellow "context large, plan a handoff"
+        >= HARD      -> orange "degradation zone, hand off now"
+  • live dispatched runs         — any detached agent runs in flight for this repo
+
+Long context degrades a model's output well before the window is full; the tiers
+give you a chance to /handoff-leave and start a fresh co before that bites.
+
+Wire it up in ~/.claude/settings.json (the installer does this for you):
+  "statusLine": { "type": "command", "command": "~/.local/bin/co-session-health" }
+
+Input: Claude Code status-line JSON on stdin. Output: one ANSI-colored line.
+Fast by design (runs per turn): no file reads beyond a small live-runs JSON.
+"""
+import json
+import os
+import sys
+
+# --- thresholds (in-context tokens) -------------------------------------------
+SOFT = 350_000          # plan a handoff
+HARD = 500_000          # degradation onset — hand off now
+PCT_SOFT = 60           # or this fraction of the window (covers smaller windows)
+PCT_HARD = 80
+
+# --- ANSI ---------------------------------------------------------------------
+DIM    = "\033[2m"
+YELLOW = "\033[33m"
+ORANGE = "\033[38;5;208m"
+CYAN   = "\033[36m"
+RESET  = "\033[0m"
+
+AGENTIC_ROOT = os.environ.get("AGENTIC_ROOT", os.path.expanduser("~/agentic"))
+ACTIVE_JSON = os.path.join(AGENTIC_ROOT, "agent-runs", "active.json")
+
+
+def _read_payload():
+    try:
+        return json.loads(sys.stdin.read() or "{}")
+    except Exception:
+        return {}
+
+
+def _model_label(p):
+    """The running model's short name. display_name is the friendly form
+    ('Opus 4.8'); fall back to the raw id, then nothing."""
+    m = p.get("model") or {}
+    return str(m.get("display_name") or m.get("id") or "")
+
+
+def _ctx_tokens(cw):
+    """Best in-context token estimate, with fallbacks for early/post-compact turns."""
+    if not isinstance(cw, dict):
+        return 0, 0, None
+    size = cw.get("context_window_size") or 0
+    pct = cw.get("used_percentage")
+    cu = cw.get("current_usage") or {}
+    if cu:
+        toks = (cu.get("input_tokens", 0) or 0) \
+             + (cu.get("cache_read_input_tokens", 0) or 0) \
+             + (cu.get("cache_creation_input_tokens", 0) or 0)
+    else:
+        toks = cw.get("total_input_tokens", 0) or 0
+    if not toks and pct and size:
+        toks = int(size * pct / 100.0)
+    if pct is None and size:
+        pct = round(100.0 * toks / size, 1) if size else None
+    return toks, size, pct
+
+
+def _fmt_k(n):
+    if not n:
+        return "0"
+    if n >= 1_000_000:
+        return f"{n/1_000_000:.1f}M".replace(".0M", "M")
+    return f"{n/1000:.0f}K"
+
+
+def _pid_alive(pid):
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # exists, just not ours
+    except (ValueError, TypeError, OSError):
+        return False
+    return True
+
+
+def _product_from_cwd(cwd):
+    """The repo segment right under AGENTIC_ROOT in the co's cwd, or None."""
+    if not cwd:
+        return None
+    root = AGENTIC_ROOT.rstrip(os.sep) + os.sep
+    if not cwd.startswith(root):
+        return None
+    return (cwd[len(root):].split(os.sep, 1)[0]) or None
+
+
+def _live_runs_segment(cwd):
+    """Detached agent runs currently in flight (from active.json), PID-filtered so a
+    stale entry can't misreport. Scoped to this co's repo; the cockpit (which may
+    dispatch across repos) keeps the fleet-wide view, labeled '(fleet)'. Never
+    raises: a broken read yields no segment, never a broken status line."""
+    try:
+        with open(ACTIVE_JSON) as fh:
+            runs = (json.load(fh) or {}).get("runs", []) or []
+    except Exception:
+        return ""
+    live = [r for r in runs if _pid_alive(r.get("pid"))]
+    product = _product_from_cwd(cwd)
+    scoped = bool(product) and product != "cockpit"
+    if scoped:
+        live = [r for r in live if str(r.get("repo")) == product]
+    if not live:
+        return ""
+    agents = [str(r.get("agent") or "?") for r in live]
+    shown = "·".join(agents[:4])
+    if len(agents) > 4:
+        shown += f"·+{len(agents) - 4}"
+    tag = "" if scoped else " (fleet)"
+    return f"  {CYAN}⚙ {len(agents)} in flight{tag}: {shown}{RESET}"
+
+
+def main():
+    p = _read_payload()
+    cw = p.get("context_window") or {}
+    toks, size, pct = _ctx_tokens(cw)
+    win = _fmt_k(size) if size else "?"
+    model = _model_label(p)
+    prefix = f"{DIM}⬡ {model}{RESET}  " if model else ""
+    gauge = f"ctx {_fmt_k(toks)}/{win}"
+    if pct is not None:
+        gauge += f" ({pct:.0f}%)"
+
+    if toks >= HARD or (pct or 0) >= PCT_HARD:
+        line = f"{ORANGE}▲ {gauge} — degradation zone, hand off now{RESET}"
+    elif toks >= SOFT or (pct or 0) >= PCT_SOFT:
+        line = f"{YELLOW}⚠ {gauge} — context large, plan a handoff{RESET}"
+    else:
+        line = f"{DIM}◷ {gauge}{RESET}"
+
+    line += _live_runs_segment(p.get("cwd") or (p.get("workspace") or {}).get("current_dir"))
+    sys.stdout.write(prefix + line)
+
+
+if __name__ == "__main__":
+    main()

@@ -80,7 +80,7 @@ mkdir -p "$ROOT" "$ROOT/agent-runs" "$ROOT/.index" "$HOME/.local/bin" "$HOME/.lo
 
 # ---- 3. binaries + lib (always refreshed — these are the kit's code) --------
 say "== installing binaries to ~/.local/bin"
-for f in co agentic-guard model-pin-guard kb-index kb-watch agentic-site; do
+for f in co co-session-health agentic-guard model-pin-guard kb-index kb-watch agentic-site; do
   cp "$KIT/bin/$f" "$HOME/.local/bin/$f"
   chmod +x "$HOME/.local/bin/$f"
 done
@@ -133,6 +133,8 @@ if os.path.exists(path):
         data = json.load(f)   # invalid JSON aborts the install loudly — fix it first
 
 data["model"] = model
+# Status line: model + context gauge (with handoff warnings) + live dispatched runs.
+data["statusLine"] = {"type": "command", "command": f"{bindir}/co-session-health"}
 hooks = data.setdefault("hooks", {})
 
 def ensure(event, matcher, command):
@@ -152,7 +154,7 @@ ensure("SessionStart", None, f"{bindir}/model-pin-guard")
 with open(path, "w") as f:
     json.dump(data, f, indent=2)
     f.write("\n")
-print(f"   model pinned to {model}; agentic-guard + model-pin-guard registered")
+print(f"   model pinned to {model}; status line + agentic-guard + model-pin-guard registered")
 PY
 
 # ---- 7. python dep, MCP registration, first index ----------------------------
